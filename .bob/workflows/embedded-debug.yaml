@@ -1,0 +1,208 @@
+id: embedded-debug
+title: Embedded C Debugging Investigation
+description: >
+  Structured debugging workflow for bare-metal embedded C firmware.
+  Takes source code, observed hardware symptoms, pin mappings, and optional
+  serial output, then drives a multi-stage investigation: symptom intake →
+  source parse → concurrency audit → hypothesis generation → targeted tests →
+  root cause statement → minimal patch → regression check.
+
+# ── How the workflow is invoked ────────────────────────────────────────────
+# In Bob chat, type:
+#   /workflow embedded-debug
+# or reference it by title:
+#   "Start the Embedded C Debugging Investigation workflow"
+# Bob will then walk you through each stage interactively.
+# ───────────────────────────────────────────────────────────────────────────
+
+inputs:
+  - id: symptom
+    label: "Observed symptom"
+    description: >
+      Describe exactly what the hardware does wrong.
+      Example: "Entering 12 on the keypad shows 1112 on the display."
+    required: true
+
+  - id: expected
+    label: "Expected behaviour"
+    description: >
+      Describe what the hardware should do.
+      Example: "Display should show 12."
+    required: true
+
+  - id: source_dir
+    label: "Path to firmware source directory"
+    description: >
+      Relative path containing the .c and .h files.
+      Example: firmware/
+    required: true
+    default: "firmware/"
+
+  - id: mcu
+    label: "Target MCU"
+    description: "e.g. ATmega328P, STM32F103, RP2040"
+    required: false
+    default: "ATmega328P"
+
+  - id: clock_hz
+    label: "Clock frequency (Hz)"
+    required: false
+    default: "16000000"
+
+  - id: serial_log
+    label: "Serial/UART log (paste or file path)"
+    description: "Optional captured output from the device."
+    required: false
+
+  - id: pin_map
+    label: "Pin mapping notes"
+    description: "Which MCU pins connect to which peripheral pins."
+    required: false
+
+  - id: compiler_output
+    label: "Compiler warnings/errors"
+    description: "Paste the full build output."
+    required: false
+
+steps:
+  # ── Stage 1: Intake & evidence gathering ──────────────────────────────
+  - id: intake
+    title: "Stage 1 — Symptom Intake"
+    skill: embedded-debugger
+    prompt: |
+      You are starting an embedded C debugging investigation.
+      Load and apply the embedded-debugger skill methodology.
+
+      ## Provided evidence
+
+      **Observed symptom:** {{symptom}}
+      **Expected behaviour:** {{expected}}
+      **Target MCU:** {{mcu}} @ {{clock_hz}} Hz
+      **Pin mappings:** {{pin_map | default("not provided")}}
+      **Serial log:** {{serial_log | default("not provided")}}
+      **Compiler output:** {{compiler_output | default("not provided")}}
+
+      ## Task
+
+      1. Acknowledge all provided evidence.
+      2. Identify any critical missing information that would block the
+         investigation (ask at most 2 clarifying questions).
+      3. Produce a "Symptom Summary" section following the skill output format.
+      4. State which source files you need to read in Stage 2.
+
+  # ── Stage 2: Read all source files ────────────────────────────────────
+  - id: source_parse
+    title: "Stage 2 — Source Parse & Data-Flow Map"
+    skill: embedded-debugger
+    depends_on: [intake]
+    prompt: |
+      Read every .c and .h file under {{source_dir}}.
+      For each file, note:
+        - All global / static variables and their types.
+        - All functions and their call sites.
+        - All ISR (interrupt service routine) definitions.
+
+      Then produce:
+        1. **Data flow map** — for every global variable: who writes it,
+           who reads it, in which execution context (ISR or foreground).
+        2. **Control flow map** — trace from the physical keypad press to
+           the digit appearing on the display, listing every function and
+           shared variable touched along the way.
+        3. **Concurrency inventory** — every variable shared between ISR
+           and non-ISR code; flag missing `volatile` and unprotected
+           multi-step accesses.
+
+  # ── Stage 3: Hypothesis generation ───────────────────────────────────
+  - id: hypotheses
+    title: "Stage 3 — Hypotheses"
+    skill: embedded-debugger
+    depends_on: [source_parse]
+    prompt: |
+      Based on the symptom trace and concurrency inventory from Stage 2,
+      generate a numbered list of hypotheses ranked by likelihood.
+
+      For each hypothesis provide:
+        - One-sentence root cause statement.
+        - Evidence FOR (cite file and line number).
+        - Evidence AGAINST.
+        - A cheap, concrete test to confirm or refute it.
+
+      Use the embedded-debugger hazard checklist to ensure you have not
+      missed common bare-metal pitfalls.
+
+  # ── Stage 4: Targeted tests ───────────────────────────────────────────
+  - id: tests
+    title: "Stage 4 — Targeted Tests"
+    skill: embedded-debugger
+    depends_on: [hypotheses]
+    prompt: |
+      For the top two hypotheses from Stage 3, write the exact minimal
+      code change (instrument, assert, or controlled experiment) that
+      would confirm or refute each hypothesis.
+
+      Show a diff-style before/after for each test change.
+      Explain what output to look for (UART print, LED toggle, logic
+      analyser trace) and what it would mean.
+
+      Do NOT fix the bug yet — these are diagnostic-only changes.
+
+  # ── Stage 5: Root cause statement ────────────────────────────────────
+  - id: root_cause
+    title: "Stage 5 — Root Cause Statement"
+    skill: embedded-debugger
+    depends_on: [tests]
+    prompt: |
+      Assuming the diagnostic tests confirmed the leading hypothesis,
+      write a precise root cause statement in the format:
+
+      ```
+      ROOT CAUSE:   <one sentence>
+      MECHANISM:    <step-by-step with file:line references>
+      EVIDENCE:     <bullet list>
+      ```
+
+      If multiple independent root causes were confirmed, list each one
+      separately and explain how they interact.
+
+  # ── Stage 6: Minimal patch ────────────────────────────────────────────
+  - id: patch
+    title: "Stage 6 — Patch"
+    skill: embedded-debugger
+    depends_on: [root_cause]
+    prompt: |
+      Apply the minimal fix for every confirmed root cause.
+      Rules:
+        - Change only what is necessary to eliminate the bug.
+        - Do not refactor unrelated code.
+        - Do not add new features.
+        - For every changed line, add a comment beginning with "FIX:"
+          explaining why this change eliminates the root cause.
+
+      Produce a unified diff or show the complete patched file(s).
+
+  # ── Stage 7: Regression check ─────────────────────────────────────────
+  - id: regression
+    title: "Stage 7 — Regression Check"
+    skill: embedded-debugger
+    depends_on: [patch]
+    prompt: |
+      Produce the regression checklist:
+
+      1. Does the patch eliminate the original symptom? Explain step by step.
+      2. Does the patch introduce any new compiler warnings? Check the
+         patched source.
+      3. Are any related edge cases now exercised? List them and state
+         whether each passes.
+      4. Is the fix correct for all compiler optimisation levels
+         (-O0, -Os, -O2)? Flag anything that might be optimisation-sensitive.
+
+      Conclude with a one-paragraph summary suitable for a commit message.
+
+outputs:
+  - id: debug_report
+    title: "Embedded Debug Report"
+    description: >
+      Full structured investigation: symptom → root cause → patch →
+      regression check.
+    format: markdown
+    file: "debugger/reports/debug_report.md"

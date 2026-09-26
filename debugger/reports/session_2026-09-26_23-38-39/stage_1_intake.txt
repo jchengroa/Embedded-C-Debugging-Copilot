@@ -1,0 +1,23 @@
+# Stage 1 — Symptom Intake
+
+**Skill:** embedded-debugger
+**Investigation:** 2026-09-26_23-38-39
+
+## Provided Evidence
+
+- **Observed symptom:** Entering 12 on keypad shows 1112 on display
+- **Expected behaviour:** Display shows 12
+- **Target MCU:** ATmega328P @ 16000000 Hz
+- **Pin mappings:** not provided
+- **Serial log:** not provided
+- **Compiler output:** not provided
+
+## Task
+
+You are starting a structured embedded C debugging investigation.
+Apply the embedded-debugger skill methodology throughout.
+
+1. Acknowledge all provided evidence.
+2. Identify at most 2 critical missing pieces of information.
+3. Produce a **Symptom Summary** in the standard skill output format.
+4. List every source file you will read in Stage 2.

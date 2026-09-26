@@ -1,0 +1,12 @@
+# Runtime dependencies for the Embedded Debugging Copilot
+# tkinter is bundled with Python on Windows — no separate install needed.
+
+# AI backend (optional — application works without it using static analysis)
+openai>=1.0.0
+
+# No other runtime dependencies required.
+# The application uses Python standard library for:
+#   - tkinter (GUI)
+#   - subprocess (test runner)
+#   - threading (background investigation)
+#   - re, os, json, difflib, uuid, dataclasses (core logic)

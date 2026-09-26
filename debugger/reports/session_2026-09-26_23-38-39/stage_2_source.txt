@@ -1,0 +1,571 @@
+# Stage 2 — Source Parse & Data-Flow Map
+
+Continuing the investigation from Stage 1.
+
+## Source Files
+
+### display.c
+```c
+/**
+ * display.c — Seven-segment segment encoding and output
+ */
+
+#include "display.h"
+#include <avr/io.h>
+
+/*
+ * Segment lookup table for digits 0–9.
+ * Bit layout: dp g f e d c b a  (MSB → LSB)
+ */
+static const uint8_t SEG_TABLE[10] = {
+    0b00111111,  /* 0: a b c d e f   */
+    0b00000110,  /* 1:   b c         */
+    0b01011011,  /* 2: a b   d e   g */
+    0b01001111,  /* 3: a b c d     g */
+    0b01100110,  /* 4:   b c     f g */
+    0b01101101,  /* 5: a   c d   f g */
+    0b01111101,  /* 6: a   c d e f g */
+    0b00000111,  /* 7: a b c         */
+    0b01111111,  /* 8: a b c d e f g */
+    0b01101111,  /* 9: a b c d   f g */
+};
+
+uint8_t digit_to_segments(uint8_t digit)
+{
+    if (digit > 9) return 0x00;
+    return SEG_TABLE[digit];
+}
+
+void display_write_segments(uint8_t segs)
+{
+    /* Segment data on PB0–PB6; preserve PB7 */
+    PORTB = (PORTB & 0x80) | (segs & 0x7F);
+}
+
+```
+
+### display.h
+```c
+/**
+ * display.h — Seven-segment display driver
+ *
+ * Segment encoding (common-cathode, active HIGH):
+ *
+ *      aaa
+ *     f   b
+ *     f   b
+ *      ggg
+ *     e   c
+ *     e   c
+ *      ddd  dp
+ *
+ *  Bit: 7=dp  6=g  5=f  4=e  3=d  2=c  1=b  0=a
+ */
+
+#ifndef DISPLAY_H
+#define DISPLAY_H
+
+#include <stdint.h>
+
+#define MAX_DIGITS 4
+
+uint8_t digit_to_segments(uint8_t digit);   /* 0–9 → segment byte */
+void    display_write_segments(uint8_t segs);
+
+#endif /* DISPLAY_H */
+
+```
+
+### input_buffer.c
+```c
+/**
+ * input_buffer.c — Circular input buffer implementation
+ *
+ * BUG: input_buffer_push is not re-entrant.  If an ISR calls any function
+ *      that reads 'count' or 'head' while main is inside push(), the buffer
+ *      state can be corrupted.
+ */
+
+#include "input_buffer.h"
+#include <string.h>
+
+void input_buffer_init(InputBuffer *buf)
+{
+    memset(buf->data, 0, INPUT_BUFFER_SIZE);
+    buf->head  = 0;
+    buf->tail  = 0;
+    buf->count = 0;
+}
+
+int8_t input_buffer_push(InputBuffer *buf, char c)
+{
+    if (buf->count >= INPUT_BUFFER_SIZE) {
+        return -1;  /* full */
+    }
+    /* BUG: non-atomic read-modify-write on buf->head and buf->count.
+     *      An interrupt between the two lines below can corrupt state. */
+    buf->data[buf->head] = c;
+    buf->head = (buf->head + 1) % INPUT_BUFFER_SIZE;
+    buf->count++;
+    return 0;
+}
+
+char input_buffer_get(const InputBuffer *buf, uint8_t idx)
+{
+    /* BUG: idx is not validated against buf->count */
+    return buf->data[(buf->tail + idx) % INPUT_BUFFER_SIZE];
+}
+
+uint8_t input_buffer_length(const InputBuffer *buf)
+{
+    return buf->count;
+}
+
+void input_buffer_clear(InputBuffer *buf)
+{
+    buf->head  = 0;
+    buf->tail  = 0;
+    buf->count = 0;
+}
+
+```
+
+### input_buffer.h
+```c
+/**
+ * input_buffer.h — Circular input buffer for keypad characters
+ */
+
+#ifndef INPUT_BUFFER_H
+#define INPUT_BUFFER_H
+
+#include <stdint.h>
+
+#define INPUT_BUFFER_SIZE 8
+
+typedef struct {
+    char    data[INPUT_BUFFER_SIZE];
+    uint8_t head;   /* write index */
+    uint8_t tail;   /* read index  */
+    uint8_t count;
+} InputBuffer;
+
+void    input_buffer_init(InputBuffer *buf);
+int8_t  input_buffer_push(InputBuffer *buf, char c);   /* returns 0 on success, -1 if full */
+char    input_buffer_get(const InputBuffer *buf, uint8_t idx);
+uint8_t input_buffer_length(const InputBuffer *buf);
+void    input_buffer_clear(InputBuffer *buf);
+
+#endif /* INPUT_BUFFER_H */
+
+```
+
+### keypad.c
+```c
+/**
+ * keypad.c — 4x4 matrix keypad driver
+ *
+ * BUG: no hardware debounce delay.  keypad_get_key() returns a key as soon
+ *      as any column reads LOW.  A single physical press can cause the
+ *      function to return the same key on many consecutive calls while
+ *      the mechanical contacts are bouncing (~5–20 ms).
+ *
+ *      Combined with the fast main() polling loop this means one press
+ *      often registers as 2–4 separate key events.
+ */
+
+#include "keypad.h"
+#include <avr/io.h>
+#include <util/delay.h>
+
+/* Keymap: [row][col] */
+static const char KEYMAP[4][4] = {
+    {'1', '2', '3', 'A'},
+    {'4', '5', '6', 'B'},
+    {'7', '8', '9', 'C'},
+    {'*', '0', '#', 'D'}
+};
+
+void keypad_init(void)
+{
+    /* Rows PC0–PC3: outputs */
+    DDRC  |=  0x0F;
+    PORTC |=  0x0F;   /* drive HIGH (inactive) */
+
+    /* Cols PC4–PC7: inputs with pull-ups */
+    DDRC  &= ~0xF0;
+    PORTC |=  0xF0;
+}
+
+char keypad_get_key(void)
+{
+    for (uint8_t row = 0; row < 4; row++) {
+        /* Drive this row LOW */
+        PORTC = (PORTC & 0xF0) | (~(1 << row) & 0x0F);
+
+        /* BUG: _delay_us(10) is insufficient settling time on noisy boards;
+         *      some layouts need ≥50 µs before reading columns reliably. */
+        _delay_us(10);
+
+        uint8_t cols = (~PINC >> 4) & 0x0F;   /* active-low → active-high */
+
+        /* Restore row HIGH */
+        PORTC |= 0x0F;
+
+        if (cols) {
+            for (uint8_t col = 0; col < 4; col++) {
+                if (cols & (1 << col)) {
+                    /* BUG: no debounce wait here — return immediately */
+                    return KEYMAP[row][col];
+                }
+            }
+        }
+    }
+    return '\0';
+}
+
+```
+
+### keypad.h
+```c
+/**
+ * keypad.h — 4x4 Matrix Keypad driver
+ * Rows: PC0–PC3 (outputs, driven LOW one at a time)
+ * Cols: PC4–PC7 (inputs with pull-ups)
+ */
+
+#ifndef KEYPAD_H
+#define KEYPAD_H
+
+#include <stdint.h>
+
+void keypad_init(void);
+char keypad_get_key(void);   /* returns '\0' if no key is pressed */
+
+#endif /* KEYPAD_H */
+
+```
+
+### main.c
+```c
+/**
+ * main.c — Seven-Segment Display with 4x4 Matrix Keypad
+ * Target: ATmega328P (Arduino Uno)
+ *
+ * BUG REPORT:
+ *   Symptom: Entering "12" on the keypad sometimes displays "1112" or "112"
+ *             on the seven-segment display.
+ *   Expected: Display shows "12".
+ *   Observed: Digits are duplicated/ghost entries appear.
+ */
+
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <util/delay.h>
+#include <string.h>
+
+#include "keypad.h"
+#include "display.h"
+#include "input_buffer.h"
+
+/* --------------------------------------------------------------------------
+ * Globals
+ * -------------------------------------------------------------------------- */
+
+/* Input buffer shared between ISR and main loop — NOT volatile-qualified. */
+InputBuffer g_input;        /* BUG: missing volatile; compiler may cache */
+
+/* Display digit buffer — index 0 = most-significant digit */
+uint8_t g_display_buf[4];   /* BUG: no mutex / double-buffer around writes */
+uint8_t g_display_digits;   /* number of active digits */
+
+/* Multiplexing state (updated by Timer0 ISR) */
+uint8_t g_mux_index;
+
+/* --------------------------------------------------------------------------
+ * Timer0 ISR — multiplexes the four seven-segment digits @ ~1 kHz
+ * -------------------------------------------------------------------------- */
+ISR(TIMER0_COMPA_vect)
+{
+    /* Turn off all digit-select lines (common-cathode: HIGH = off) */
+    PORTD |= (1 << PD4) | (1 << PD5) | (1 << PD6) | (1 << PD7);
+
+    /* BUG: g_display_digits is read here without ensuring the write in
+     *      main() is complete.  If main() is mid-update the ISR may see
+     *      a stale value and latch an extra digit. */
+    if (g_mux_index < g_display_digits) {
+        display_write_segments(g_display_buf[g_mux_index]);
+        /* Enable digit select */
+        PORTD &= ~(1 << (PD4 + g_mux_index));
+    }
+
+    g_mux_index++;
+    /* BUG: wrap is against MAX_DIGITS (4) instead of g_display_digits,
+     *      so the counter keeps cycling through uninitialised slots when
+     *      fewer than 4 digits are active. */
+    if (g_mux_index >= MAX_DIGITS) {
+        g_mux_index = 0;
+    }
+}
+
+/* --------------------------------------------------------------------------
+ * Keypad scan — polled, called from main loop
+ * BUG: no debounce; a single physical press can produce multiple events
+ * -------------------------------------------------------------------------- */
+static char scan_keypad(void)
+{
+    return keypad_get_key();   /* returns '\0' if no key pressed */
+}
+
+/* --------------------------------------------------------------------------
+ * Append a digit character to the input buffer and refresh the display
+ * -------------------------------------------------------------------------- */
+static void handle_key(char key)
+{
+    /* BUG: input_buffer_push is not atomic; the ISR can read g_display_buf
+     *      while we are in the middle of updating it below. */
+    if (input_buffer_push(&g_input, key) != 0) {
+        /* buffer full — ignore */
+        return;
+    }
+
+    /* Rebuild display buffer from input buffer */
+    /* BUG: g_display_digits is updated AFTER g_display_buf is written,
+     *      but the ISR checks g_display_digits first.  There is a window
+     *      where g_display_digits still holds the old count while
+     *      g_display_buf already contains the new digit — causing the old
+     *      count of digits to be shown with the new segment data. */
+    uint8_t len = input_buffer_length(&g_input);
+    for (uint8_t i = 0; i < len; i++) {
+        g_display_buf[i] = digit_to_segments(input_buffer_get(&g_input, i) - '0');
+    }
+    g_display_digits = len;   /* should be written first and with sei()/cli() guard */
+}
+
+/* --------------------------------------------------------------------------
+ * Hardware initialisation
+ * -------------------------------------------------------------------------- */
+static void hw_init(void)
+{
+    /* Segment data lines: PB0–PB6 as outputs */
+    DDRB |= 0x7F;
+
+    /* Digit select lines: PD4–PD7 as outputs, initially HIGH (off) */
+    DDRD  |= (1 << PD4) | (1 << PD5) | (1 << PD6) | (1 << PD7);
+    PORTD |= (1 << PD4) | (1 << PD5) | (1 << PD6) | (1 << PD7);
+
+    keypad_init();
+    input_buffer_init(&g_input);
+
+    /* Timer0: CTC, prescaler /64, compare = 249 → 1 ms period @ 16 MHz */
+    TCCR0A = (1 << WGM01);
+    TCCR0B = (1 << CS01) | (1 << CS00);
+    OCR0A  = 249;
+    TIMSK0 = (1 << OCIE0A);
+
+    sei();
+}
+
+/* --------------------------------------------------------------------------
+ * Main loop
+ * -------------------------------------------------------------------------- */
+int main(void)
+{
+    hw_init();
+
+    memset(g_display_buf, 0, sizeof(g_display_buf));
+    g_display_digits = 0;
+    g_mux_index      = 0;
+
+    while (1) {
+        char key = scan_keypad();
+        if (key != '\0') {
+            handle_key(key);
+        }
+        /* BUG: no delay / debounce here; fast loop causes multiple
+         *      handle_key calls for a single key press */
+    }
+}
+
+```
+
+### main_fixed.c
+```c
+/**
+ * main_fixed.c — Seven-Segment Display with 4x4 Matrix Keypad (FIXED)
+ *
+ * Fixes applied:
+ *   1. g_input declared volatile so the compiler never caches its members
+ *      across ISR boundaries.
+ *   2. Atomic display-buffer update: disable Timer0 ISR (cli/sei bracket)
+ *      before touching g_display_buf / g_display_digits.
+ *   3. g_display_digits written BEFORE the ISR can observe the new count
+ *      (write order corrected inside the cli block).
+ *   4. g_mux_index wraps on g_display_digits, not the fixed MAX_DIGITS,
+ *      so inactive slots are never latched.
+ *   5. Keypad debounce: 50 ms blocking delay after a valid key detection,
+ *      with a key-release wait to prevent repeat events.
+ *   6. Settling time in keypad scan raised to 50 µs.
+ */
+
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <util/delay.h>
+#include <string.h>
+
+#include "keypad.h"
+#include "display.h"
+#include "input_buffer.h"
+
+/* --------------------------------------------------------------------------
+ * Globals — volatile where shared with ISR
+ * -------------------------------------------------------------------------- */
+
+volatile InputBuffer g_input;           /* FIX 1: volatile */
+
+volatile uint8_t g_display_buf[4];
+volatile uint8_t g_display_digits;
+volatile uint8_t g_mux_index;
+
+/* --------------------------------------------------------------------------
+ * Timer0 ISR
+ * -------------------------------------------------------------------------- */
+ISR(TIMER0_COMPA_vect)
+{
+    PORTD |= (1 << PD4) | (1 << PD5) | (1 << PD6) | (1 << PD7);
+
+    uint8_t digits = g_display_digits;   /* snapshot once */
+    if (digits == 0) return;
+
+    if (g_mux_index < digits) {
+        display_write_segments(g_display_buf[g_mux_index]);
+        PORTD &= ~(1 << (PD4 + g_mux_index));
+    }
+
+    g_mux_index++;
+    /* FIX 4: wrap on actual digit count, not MAX_DIGITS */
+    if (g_mux_index >= digits) {
+        g_mux_index = 0;
+    }
+}
+
+/* --------------------------------------------------------------------------
+ * Keypad scan with debounce (FIX 5)
+ * -------------------------------------------------------------------------- */
+static char scan_keypad(void)
+{
+    char key = keypad_get_key();
+    if (key == '\0') return '\0';
+
+    /* Debounce: wait for the key to be released, then add settling delay */
+    _delay_ms(50);
+    while (keypad_get_key() != '\0') { /* wait for release */ }
+    _delay_ms(10);
+
+    return key;
+}
+
+/* --------------------------------------------------------------------------
+ * Append a digit to the input buffer and refresh the display atomically
+ * -------------------------------------------------------------------------- */
+static void handle_key(char key)
+{
+    /* Work on a local copy so the ISR is unaffected during preparation */
+    uint8_t new_buf[MAX_DIGITS];
+    uint8_t new_len;
+
+    /* Temporarily disable Timer0 compare interrupt for the buffer read */
+    cli();
+    uint8_t old_len = (uint8_t)g_input.count;
+    cli();   /* already off — harmless; just a reminder */
+
+    if (old_len >= INPUT_BUFFER_SIZE) {
+        sei();
+        return;
+    }
+
+    /* Push to local shadow first */
+    char shadow[INPUT_BUFFER_SIZE];
+    for (uint8_t i = 0; i < old_len; i++) {
+        shadow[i] = g_input.data[(g_input.tail + i) % INPUT_BUFFER_SIZE];
+    }
+    shadow[old_len] = key;
+    new_len = old_len + 1;
+    sei();
+
+    /* Build segment data from shadow */
+    for (uint8_t i = 0; i < new_len; i++) {
+        new_buf[i] = digit_to_segments(shadow[i] - '0');
+    }
+
+    /* FIX 2 & 3: Atomic update — ISR is blocked during the critical section.
+     * Write g_display_digits = 0 first so the ISR sees an empty display
+     * rather than a half-updated buffer. */
+    cli();
+    g_display_digits = 0;           /* ISR will skip display while we update */
+    for (uint8_t i = 0; i < new_len; i++) {
+        g_display_buf[i] = new_buf[i];
+    }
+    g_mux_index    = 0;
+    /* Commit — ISR can now latch the full, consistent state */
+    g_display_digits = new_len;
+    /* Also push to the real input buffer */
+    input_buffer_push((InputBuffer *)&g_input, key);
+    sei();
+}
+
+/* --------------------------------------------------------------------------
+ * Hardware initialisation
+ * -------------------------------------------------------------------------- */
+static void hw_init(void)
+{
+    DDRB |= 0x7F;
+
+    DDRD  |= (1 << PD4) | (1 << PD5) | (1 << PD6) | (1 << PD7);
+    PORTD |= (1 << PD4) | (1 << PD5) | (1 << PD6) | (1 << PD7);
+
+    keypad_init();
+    input_buffer_init((InputBuffer *)&g_input);
+
+    TCCR0A = (1 << WGM01);
+    TCCR0B = (1 << CS01) | (1 << CS00);
+    OCR0A  = 249;
+    TIMSK0 = (1 << OCIE0A);
+
+    sei();
+}
+
+/* --------------------------------------------------------------------------
+ * Main loop
+ * -------------------------------------------------------------------------- */
+int main(void)
+{
+    hw_init();
+
+    memset((void *)g_display_buf, 0, sizeof(g_display_buf));
+    g_display_digits = 0;
+    g_mux_index      = 0;
+
+    while (1) {
+        char key = scan_keypad();   /* blocks on debounce internally */
+        if (key != '\0') {
+            handle_key(key);
+        }
+    }
+}
+
+```
+
+## Task
+
+Read every source file above. Produce:
+
+1. **Data flow map** — every global/static variable: who writes it, who reads
+   it, in which execution context (ISR or foreground loop).
+2. **Control flow map** — trace from physical keypad press to digit on display,
+   listing every function and shared variable along the path.
+3. **Concurrency inventory** — every variable shared between ISR and non-ISR
+   code. Flag:
+   - Missing `volatile` qualifiers.
+   - Multi-step read-modify-write sequences not protected by `cli()`/`sei()`.
+   - Update ordering hazards (count written after data, or vice versa).

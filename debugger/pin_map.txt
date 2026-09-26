@@ -1,0 +1,37 @@
+## Pin Mapping — ATmega328P (Arduino Uno)
+
+### Seven-Segment Display (common-cathode)
+| Segment | MCU Pin | Arduino Pin | Port Bit |
+|---------|---------|-------------|----------|
+| a       | PB0     | D8          | PORTB.0  |
+| b       | PB1     | D9          | PORTB.1  |
+| c       | PB2     | D10         | PORTB.2  |
+| d       | PB3     | D11         | PORTB.3  |
+| e       | PB4     | D12         | PORTB.4  |
+| f       | PB5     | D13         | PORTB.5  |
+| g       | PB6     | (no Arduino label — direct port access) | PORTB.6 |
+
+### Digit Select Lines (common-cathode, active LOW)
+| Digit   | MCU Pin | Arduino Pin | Port Bit |
+|---------|---------|-------------|----------|
+| Digit 0 (MSD) | PD4 | D4 | PORTD.4 |
+| Digit 1       | PD5 | D5 | PORTD.5 |
+| Digit 2       | PD6 | D6 | PORTD.6 |
+| Digit 3 (LSD) | PD7 | D7 | PORTD.7 |
+
+### 4×4 Matrix Keypad
+| Signal   | MCU Pin | Arduino Pin | Port Bit |
+|----------|---------|-------------|----------|
+| Row 0    | PC0     | A0          | PORTC.0  |
+| Row 1    | PC1     | A1          | PORTC.1  |
+| Row 2    | PC2     | A2          | PORTC.2  |
+| Row 3    | PC3     | A3          | PORTC.3  |
+| Col 0    | PC4     | A4          | PORTC.4  |
+| Col 1    | PC5     | A5          | PORTC.5  |
+| Col 2    | PC6     | (ADC6, input only) | PORTC.6 |
+| Col 3    | PC7     | (ADC7, input only) | PORTC.7 |
+
+### Notes
+- Display uses current-limiting resistors (220 Ω) on each segment line.
+- Keypad column lines have 10 kΩ pull-up resistors to VCC.
+- Board operates at 5 V, 16 MHz crystal oscillator.

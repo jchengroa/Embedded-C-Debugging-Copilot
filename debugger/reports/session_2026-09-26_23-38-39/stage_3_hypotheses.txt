@@ -1,0 +1,16 @@
+# Stage 3 — Hypotheses
+
+Continuing the investigation from Stage 2.
+
+## Task
+
+Based on the symptom trace and concurrency inventory, generate a numbered list
+of hypotheses ranked by likelihood.
+
+For each hypothesis:
+- **Hypothesis:** one sentence root cause statement.
+- **Evidence for:** cite file name and line number.
+- **Evidence against:** any contradicting observations.
+- **Test:** the cheapest concrete experiment to confirm or refute it.
+
+Use the embedded-debugger hazard checklist to ensure completeness.

@@ -1,0 +1,17 @@
+Seven-segment display duplicates digits when entering a number on the keypad.
+
+Steps to reproduce:
+  1. Power on the board.
+  2. Press key '1' on the keypad.
+  3. Press key '2' on the keypad.
+  4. Observe the display.
+
+Expected: Display shows "12".
+Observed:  Display shows "112" or "1112". The first digit ('1') appears
+           two or three times before '2'.
+
+Notes:
+  - The duplication is not always the same count; sometimes it's 2 extra
+    digits, sometimes 1.
+  - The problem is worse when pressing keys quickly.
+  - Powering off and on does NOT clear the issue — it is reproducible every run.

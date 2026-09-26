@@ -1,0 +1,14 @@
+# Stage 6 — Patch
+
+Continuing the investigation from Stage 5.
+
+## Task
+
+Apply the **minimal fix** for every confirmed root cause. Rules:
+- Change only what is necessary to eliminate the bug.
+- Do not refactor unrelated code.
+- Do not add new features.
+- For every changed line or block, add a comment beginning with `/* FIX: */`
+  explaining why this eliminates the root cause.
+
+Show either a unified diff or the complete patched file(s).

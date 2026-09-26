@@ -1,0 +1,14 @@
+# Stage 4 — Targeted Tests
+
+Continuing the investigation from Stage 3.
+
+## Task
+
+For the **top two** hypotheses, write the exact minimal code instrumentation
+that would confirm or refute each:
+
+- Show a diff-style before/after (or the exact lines to add/change).
+- Explain what to observe (UART output, GPIO toggle, logic analyser trace).
+- Explain what the observation means for confirming or refuting the hypothesis.
+
+Do NOT fix the bug yet. These are diagnostic changes only.

@@ -1,0 +1,18 @@
+# Stage 5 — Root Cause Statement
+
+Continuing the investigation from Stage 4.
+
+Assume the diagnostic tests confirmed the leading hypothesis.
+
+## Task
+
+Write a precise root cause statement:
+
+```
+ROOT CAUSE:   <one sentence>
+MECHANISM:    <step-by-step with file:line references>
+EVIDENCE:     <bullet list citing code lines and observed behaviour>
+```
+
+If multiple independent root causes were confirmed, list each one and explain
+how they interact to produce the observed symptom.

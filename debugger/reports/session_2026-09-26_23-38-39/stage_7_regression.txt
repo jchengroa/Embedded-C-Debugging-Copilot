@@ -1,0 +1,14 @@
+# Stage 7 — Regression Check
+
+Continuing the investigation from Stage 6.
+
+## Task
+
+Produce the regression checklist:
+
+1. Does the patch eliminate the original symptom "Entering 12 on keypad shows 1112 on display"? Explain step by step.
+2. Does the patch introduce any new compiler warnings?
+3. Are there related edge cases to verify? List them and state pass/fail.
+4. Is the fix correct under all compiler optimisation levels (-O0, -Os, -O2)?
+
+Conclude with a one-paragraph commit message summary.
